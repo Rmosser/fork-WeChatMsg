@@ -1,25 +1,40 @@
-import os
-import openai
+import json
 
-print("欢迎使用ChatGPT智能问答，请在Q:后面输入你的问题，输入quit退出！")
-openai.api_key = '''[REDACTED-JWT]'''
+from pyecharts import options as opts
+from pyecharts.charts import Graph
 
-start_sequence = "\nA:"
-restart_sequence = "\nQ: "
-while True:
-    prompt = input(restart_sequence)
-    if prompt == 'quit':
-        break
-    else:
-        try:
-            response = openai.Completion.create(
-                model="text-davinci-003",  # 这里我们使用的是davinci-003的模型，准确度更高。
-                prompt=prompt,
-                temperature=1,
-                max_tokens=2000,  # 这里限制的是回答的长度，你可以可以限制字数，如:写一个300字作文等。
-                frequency_penalty=0,
-                presence_penalty=0
-            )
-            print(start_sequence, response["choices"][0]["text"].strip())
-        except Exception as exc:  # 捕获异常后打印出来
-            print(exc)
+with open(r'data/npmdepgraph.min10.json', 'r') as f:
+    data = json.load(f)
+
+nodes = [
+    {
+        'x': node['x'],
+        'y': node['y'],
+        'name': node['label'],
+        'symbolSize': node['size'],
+        'itemStyle': {'color': node['color']}
+    }
+    for node in data['nodes']
+]
+
+edges = [
+    {
+        'source': edge['sourceID'],
+        'target': edge['targetID']
+    }
+    for edge in data['edges']
+]
+
+G = Graph(init_opts=opts.InitOpts(width='900', height='900'))
+G.add(
+    series_name='',
+    nodes=nodes,
+    links=edges,
+    layout='none',
+    is_roam=True,
+    is_focusnode=True,
+    label_opts=opts.LabelOpts(is_show=True),
+    linestyle_opts=opts.LineStyleOpts(width=0.5, curve=0.3, opacity=0.7)
+)
+G.set_global_opts(title_opts=opts.TitleOpts(title='NPM Dependencies'))
+G.render('npm_dependencies.html')
