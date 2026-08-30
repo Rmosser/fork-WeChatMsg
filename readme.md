@@ -7,7 +7,8 @@
 <a href="https://github.com/LC044/WeChatMsg/issues">
       <img alt="Issues" src="https://img.shields.io/github/issues/LC044/WeChatMsg?color=0088ff" />
     </a>
-<a href="./doc/readme.md">
+<!-- Rmosser compatibility patch: this upstream snapshot omits doc/readme.md. -->
+<a href="https://github.com/LC044/WeChatMsg#readme">
     <img src="https://img.shields.io/badge/文档-最新-brightgreen.svg" />
 </a>
 <a href="LICENSE">
