@@ -17,3 +17,5 @@ app/DataBase/Msg/*
 *.log
 *.spec
 test*
+!tests/
+!tests/test_main_spec.py
