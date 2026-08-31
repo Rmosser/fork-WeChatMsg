@@ -1,7 +1,7 @@
 import json
 import os.path
 import time
-import traceback
+import uuid
 
 from PyQt5.QtCore import pyqtSignal, QThread, QUrl, QFile, QIODevice, QTextStream
 from PyQt5.QtGui import QDesktopServices
@@ -52,7 +52,6 @@ class DecryptControl(QWidget, decryptUi.Ui_Dialog):
             else:
                 return
             result = get_wx_info.get_info(VERSION_LIST)
-            print(result)
             if result == -1:
                 QMessageBox.critical(self, "错误", "请登录微信")
             elif result == -2:
@@ -82,10 +81,12 @@ class DecryptControl(QWidget, decryptUi.Ui_Dialog):
                 if self.wx_dir and os.path.exists(os.path.join(self.wx_dir)):
                     self.label_ready.setText('已就绪')
         except Exception as e:
-            print(e)
             QMessageBox.critical(self, "错误", "请登录微信")
-            logger.error(traceback.format_exc())
-            traceback.print_exc()
+            logger.error(
+                "pc_wechat_info_failed error_type=%s",
+                type(e).__name__,
+                exc_info=True,
+            )
 
     def set_wxid_(self):
         self.info['wxid'] = self.lineEdit.text()
@@ -153,8 +154,16 @@ class DecryptControl(QWidget, decryptUi.Ui_Dialog):
         #     self.btnExitClicked()
         #     data.init_database()
 
-    def btnExitClicked(self):
+    def btnExitClicked(self, status='ok'):
         # print("Exit clicked")
+        if status != 'ok':
+            logger.error(
+                "pc_decrypt_incomplete run_id=%s status=%s",
+                getattr(self.thread2, 'run_id', '<unknown>'),
+                status,
+            )
+            QMessageBox.critical(self, "错误", "数据库解密未完成，请检查错误日志")
+            return
         dic = {
             'wxid': self.info['wxid'],
             'wx_dir': self.wx_dir,
@@ -169,14 +178,35 @@ class DecryptControl(QWidget, decryptUi.Ui_Dialog):
         except:
             with open('./info.json', 'w', encoding='utf-8') as f:
                 f.write(json.dumps(dic))
-            # 目标数据库文件
+        # 目标数据库文件
         target_database = "app/DataBase/Msg/MSG.db"
         # 源数据库文件列表
         source_databases = [f"app/DataBase/Msg/MSG{i}.db" for i in range(20)]
         import shutil
-        shutil.copy("app/DataBase/Msg/MSG0.db", target_database)  # 使用一个数据库文件作为模板
-        # 合并数据库
-        merge_databases(source_databases, target_database)
+        run_id = getattr(self.thread2, 'run_id', uuid.uuid4().hex)
+        try:
+            shutil.copy("app/DataBase/Msg/MSG0.db", target_database)  # 使用一个数据库文件作为模板
+            # 合并数据库
+            merge_result = merge_databases(source_databases, target_database, run_id=run_id)
+        except Exception as e:
+            logger.error(
+                "pc_database_merge_failed run_id=%s error_type=%s",
+                run_id,
+                type(e).__name__,
+                exc_info=True,
+            )
+            QMessageBox.critical(self, "错误", "数据库合并失败，请检查错误日志")
+            return
+        if merge_result['status'] != 'complete':
+            logger.error(
+                "pc_database_merge_incomplete run_id=%s merged=%d expected=%d missing_count=%d",
+                run_id,
+                merge_result['merged_count'],
+                merge_result['expected_count'],
+                len(merge_result['missing']),
+            )
+            QMessageBox.critical(self, "错误", "数据库分片不完整，未生成成功结果")
+            return
         self.DecryptSignal.emit(True)
         self.close()
 
@@ -191,6 +221,7 @@ class DecryptThread(QThread):
         self.db_path = db_path
         self.key = key
         self.textBrowser = None
+        self.run_id = uuid.uuid4().hex
 
     def __del__(self):
         pass
@@ -220,11 +251,46 @@ class DecryptThread(QThread):
                         output_path = os.path.join(output_dir, file)
                         tasks.append([self.key, inpath, output_path])
         self.maxNumSignal.emit(len(tasks))
+        failures = []
         for i, task in enumerate(tasks):
-            decrypt.decrypt(*task)
+            try:
+                result = decrypt.decrypt(*task)
+                if not isinstance(result, dict) or result.get('ok') is not True:
+                    failures.append(i)
+                    logger.error(
+                        "pc_decrypt_task_failed run_id=%s index=%d result=%s",
+                        self.run_id,
+                        i,
+                        result,
+                    )
+            except Exception as e:
+                failures.append(i)
+                logger.error(
+                    "pc_decrypt_task_failed run_id=%s index=%d error_type=%s",
+                    self.run_id,
+                    i,
+                    type(e).__name__,
+                    exc_info=True,
+                )
             self.signal.emit(str(i))
-        # print(self.db_path)
-        self.okSignal.emit('ok')
+        if not tasks:
+            failures.append('no_tasks')
+        if failures:
+            logger.error(
+                "pc_decrypt_incomplete run_id=%s task_count=%d failure_count=%d failure_indexes=%s",
+                self.run_id,
+                len(tasks),
+                len(failures),
+                failures[:20],
+            )
+            self.okSignal.emit('failed')
+        else:
+            logger.info(
+                "pc_decrypt_complete run_id=%s task_count=%d",
+                self.run_id,
+                len(tasks),
+            )
+            self.okSignal.emit('ok')
         # self.signal.emit('100')
 
 
