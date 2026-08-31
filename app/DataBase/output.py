@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import uuid
 
 import docx
 import numpy as np
@@ -14,7 +15,8 @@ from docxcompose.composer import Composer
 
 from app import person
 from app.DataBase import data
-from app.log import log
+from app.log import log, logger
+from app.log.logger import safe_log_value
 
 
 # import data
@@ -64,6 +66,7 @@ class Output(QThread):
         self.msg_id = 0
         self.output_type = type_
         self.total_num = 0
+        self.run_id = uuid.uuid4().hex
 
     @log
     def merge_docx(self, conRemark, n):
@@ -95,8 +98,23 @@ class Output(QThread):
             QThread.sleep(1)
             conRemark = data.get_conRemark(self.ta_username)
             self.progressSignal.emit(self.total_num - 1)
-            self.merge_docx(conRemark, self.n)
-            print('ok')
+            try:
+                self.merge_docx(conRemark, self.n)
+            except Exception as e:
+                logger.error(
+                    "wechat_docx_merge_failed run_id=%s contact=%s error_type=%s",
+                    self.run_id,
+                    safe_log_value('account', conRemark),
+                    type(e).__name__,
+                    exc_info=True,
+                )
+                return
+            logger.info(
+                "wechat_docx_export_complete run_id=%s contact=%s parts=%d",
+                self.run_id,
+                safe_log_value('account', conRemark),
+                self.n,
+            )
             self.progressSignal.emit(self.total_num)
             self.okSignal.emit(1)
         self.progressSignal.emit(self.i)
@@ -106,10 +124,23 @@ class Output(QThread):
         origin_docx_path = f"{os.path.abspath('.')}/data/聊天记录/{conRemark}"
         messages = data.get_all_message(self.ta_username)
         # print(messages)
-        self.Child0 = ChildThread(self.Me, self.ta_username, messages, conRemark, 0, type_=ChildThread.CSV)
+        self.Child0 = ChildThread(
+            self.Me,
+            self.ta_username,
+            messages,
+            conRemark,
+            0,
+            type_=ChildThread.CSV,
+            run_id=self.run_id,
+        )
         self.Child0.progressSignal.connect(self.progress)
         self.Child0.start()
-        print("成功导出CSV文件：", origin_docx_path)
+        logger.info(
+            "wechat_csv_export_started run_id=%s contact=%s output=%s",
+            self.run_id,
+            safe_log_value('account', self.ta_username),
+            safe_log_value('out_path', origin_docx_path),
+        )
 
     def run(self):
         conRemark = data.get_conRemark(self.ta_username)
@@ -129,7 +160,14 @@ class Output(QThread):
                         p = l
                     len_data = messages[q:p]
                     # self.to_docx(len_data, i, conRemark)
-                    self.Child[i] = ChildThread(self.Me, self.ta_username, len_data, conRemark, i)
+                    self.Child[i] = ChildThread(
+                        self.Me,
+                        self.ta_username,
+                        len_data,
+                        conRemark,
+                        i,
+                        run_id=self.run_id,
+                    )
                     self.Child[i].progressSignal.connect(self.progress)
                     self.Child[i].start()
         elif self.output_type == self.CSV:
@@ -138,9 +176,27 @@ class Output(QThread):
             origin_docx_path = f"{os.path.abspath('.')}/data/聊天记录/{self.ta_username}"
             messages = data.get_all_message(self.ta_username)
             # print(messages)
-            self.Child0 = ChildThread(self.Me, self.ta_username, messages, conRemark, 0, type_=ChildThread.CSV)
+            self.Child0 = ChildThread(
+                self.Me,
+                self.ta_username,
+                messages,
+                conRemark,
+                0,
+                type_=ChildThread.CSV,
+                run_id=self.run_id,
+            )
             self.Child0.progressSignal.connect(self.progress)
-            self.Child0.run()
+            try:
+                self.Child0.run()
+            except Exception as e:
+                logger.error(
+                    "wechat_csv_export_failed run_id=%s contact=%s error_type=%s",
+                    self.run_id,
+                    safe_log_value('account', self.ta_username),
+                    type(e).__name__,
+                    exc_info=True,
+                )
+                return
             self.okSignal.emit(1)
 
 
@@ -155,7 +211,7 @@ class ChildThread(QThread):
     DOCX = 1
     HTML = 2
 
-    def __init__(self, Me: person.Me, ta_u, message, conRemark, num, parent=None, type_=DOCX):
+    def __init__(self, Me: person.Me, ta_u, message, conRemark, num, parent=None, type_=DOCX, run_id=None):
         super().__init__(parent)
         self.Me = Me
         self.sec = 2  # 默认1000秒
@@ -167,6 +223,7 @@ class ChildThread(QThread):
         self.message = message
         self.msg_id = 0
         self.output_type = type_
+        self.run_id = run_id or uuid.uuid4().hex
 
     def create_table(self, doc, isSend):
         '''
@@ -233,8 +290,14 @@ class ChildThread(QThread):
         try:
             run.add_picture(f'{imgPath}', height=shared.Inches(2))
             doc.add_paragraph()
-        except Exception:
-            print("Error!image")
+        except Exception as e:
+            logger.error(
+                "wechat_docx_image_failed run_id=%s msg_id=%s error_type=%s",
+                self.run_id,
+                safe_log_value('msgId', getattr(self, 'current_msg_id', 'unknown')),
+                type(e).__name__,
+                exc_info=True,
+            )
 
         # run.add_picture(f'{Path}/{imgPath}', height=shared.Inches(2))
 
@@ -351,9 +414,20 @@ class ChildThread(QThread):
             template = ''.join(template.split('${fromusername@textstatusicon}'))
             template = template.replace(f'${{{fromUser}}}', data.get_conRemark(fromUser))
             template = template.replace(f'${{{pattedUser}}}', data.get_conRemark(pattedUser))
-            print(template)
+            logger.debug(
+                "wechat_docx_pat_message run_id=%s msg_id=%s template=%s",
+                self.run_id,
+                safe_log_value('msgId', getattr(self, 'current_msg_id', 'unknown')),
+                safe_log_value('content', template),
+            )
         except Exception as e:
-            print(e)
+            logger.error(
+                "wechat_docx_pat_message_failed run_id=%s msg_id=%s error_type=%s",
+                self.run_id,
+                safe_log_value('msgId', getattr(self, 'current_msg_id', 'unknown')),
+                type(e).__name__,
+                exc_info=True,
+            )
             template = '糟糕！出错了。'
         p = doc.add_paragraph()
         run = p.add_run(template)
@@ -364,7 +438,13 @@ class ChildThread(QThread):
         # run.font.highlight_color=WD_COLOR_INDEX.GRAY_25
 
     def video(self, doc, isSend, content, status, img_path):
-        print(content, img_path)
+        logger.info(
+            "wechat_docx_video_skipped run_id=%s msg_id=%s content=%s image=%s",
+            self.run_id,
+            safe_log_value('msgId', getattr(self, 'current_msg_id', 'unknown')),
+            safe_log_value('content', content),
+            safe_log_value('path', img_path),
+        )
 
     def to_docx(self, messages, i, conRemark):
         '''创建联系人目录'''
@@ -377,6 +457,7 @@ class ChildThread(QThread):
             self.progressSignal.emit(self.i)
             self.i += 1
             msgId = message[0]
+            self.current_msg_id = msgId
             ta_username = message[7]
             Type = int(message[2])
             isSend = message[4]
@@ -393,7 +474,13 @@ class ChildThread(QThread):
                 try:
                     self.text(doc, isSend, content, status)
                 except Exception as e:
-                    print(e)
+                    logger.error(
+                        "wechat_docx_text_failed run_id=%s msg_id=%s error_type=%s",
+                        self.run_id,
+                        safe_log_value('msgId', msgId),
+                        type(e).__name__,
+                        exc_info=True,
+                    )
             elif Type == 3:
                 self.image(doc, isSend, 3, content, imgPath)
             elif Type == 47:
@@ -410,7 +497,12 @@ class ChildThread(QThread):
                 # print(createTime)
                 self.video(doc, isSend, content, status, imgPath)
         # doc.add_paragraph(str(i))
-        print(filename)
+        logger.info(
+            "wechat_docx_part_complete run_id=%s part=%d output=%s",
+            self.run_id,
+            i,
+            safe_log_value('out_path', filename),
+        )
         doc.save(filename)
 
     def to_csv(self, messages, i, conRemark):
@@ -428,8 +520,14 @@ class ChildThread(QThread):
         df["isSend"] = np.array(list(map(lambda x: x[4], messages)))
         df["msgId"] = np.array(list(map(lambda x: x[0], messages)))
         df.to_csv(filename)
-        # df.to_csv('data.csv')
-        print(df)
+        # Keep message bodies and identity fields out of stdout/application logs.
+        logger.info(
+            "wechat_csv_part_complete run_id=%s part=%d rows=%d output=%s",
+            self.run_id,
+            i,
+            len(df.index),
+            safe_log_value('out_path', filename),
+        )
         self.progressSignal.emit(self.num)
 
     def to_html(self, messages, i, conRemark):
@@ -440,7 +538,7 @@ class ChildThread(QThread):
             # print("导出docx")
             self.to_docx(self.message, self.num, self.conRemark)
         elif self.output_type == self.CSV:
-            print("导出csv001")
+            logger.info("wechat_csv_export_run run_id=%s", self.run_id)
             # print('00', self.message[0])
             self.to_csv(self.message, self.num, self.conRemark)
 
