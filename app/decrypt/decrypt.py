@@ -6,6 +6,7 @@ from typing import Union, List
 from Cryptodome.Cipher import AES
 
 from app.log import log
+from app.log.logger import _digest
 
 # from Crypto.Cipher import AES # 如果上面的导入失败，可以尝试使用这个
 
@@ -16,15 +17,19 @@ DEFAULT_PAGESIZE = 4096
 DEFAULT_ITER = 64000
 
 
+def _path_label(value):
+    return f"<hash:{_digest(value)}>"
+
+
 # 通过密钥解密数据库
 @log
 def decrypt(key: str, db_path, out_path):
     if not os.path.exists(db_path):
-        return f"[-] db_path:'{db_path}' File not found!"
+        return f"[-] input database not found (path:{_path_label(db_path)})"
     if not os.path.exists(os.path.dirname(out_path)):
-        return f"[-] out_path:'{out_path}' File not found!"
+        return f"[-] output directory not found (path:{_path_label(os.path.dirname(out_path))})"
     if len(key) != 64:
-        return f"[-] key:'{key}' Error!"
+        return "[-] database key is invalid"
     password = bytes.fromhex(key.strip())
     with open(db_path, "rb") as file:
         blist = file.read()
@@ -39,7 +44,7 @@ def decrypt(key: str, db_path, out_path):
     hash_mac.update(b'\x01\x00\x00\x00')
 
     if hash_mac.digest() != first[-32:-12]:
-        return f"[-] Password Error! (key:'{key}'; db_path:'{db_path}'; out_path:'{out_path}' )"
+        return "[-] database key did not unlock the input"
 
     newblist = [blist[i:i + DEFAULT_PAGESIZE] for i in range(DEFAULT_PAGESIZE, len(blist), DEFAULT_PAGESIZE)]
 
@@ -55,19 +60,23 @@ def decrypt(key: str, db_path, out_path):
             decrypted = t.decrypt(i[:-48])
             deFile.write(decrypted)
             deFile.write(i[-48:])
-    return [True, db_path, out_path, key]
+    return {
+        "ok": True,
+        "db_path": _path_label(db_path),
+        "out_path": _path_label(out_path),
+    }
 
 
 @log
 def batch_decrypt(key: str, db_path: Union[str, List[str]], out_path: str):
     if not isinstance(key, str) or not isinstance(out_path, str) or not os.path.exists(out_path) or len(key) != 64:
-        return f"[-] (key:'{key}' or out_path:'{out_path}') Error!"
+        return "[-] database key or output directory is invalid"
 
     process_list = []
 
     if isinstance(db_path, str):
         if not os.path.exists(db_path):
-            return f"[-] db_path:'{db_path}' not found!"
+            return f"[-] input database not found (path:{_path_label(db_path)})"
 
         if os.path.isfile(db_path):
             inpath = db_path
@@ -85,7 +94,7 @@ def batch_decrypt(key: str, db_path: Union[str, List[str]], out_path: str):
                         os.makedirs(os.path.dirname(outpath))
                     process_list.append([key, inpath, outpath])
         else:
-            return f"[-] db_path:'{db_path}' Error "
+            return "[-] input database path is invalid"
     elif isinstance(db_path, list):
         rt_path = os.path.commonprefix(db_path)
         if not os.path.exists(rt_path):
@@ -93,7 +102,7 @@ def batch_decrypt(key: str, db_path: Union[str, List[str]], out_path: str):
 
         for inpath in db_path:
             if not os.path.exists(inpath):
-                return f"[-] db_path:'{db_path}' not found!"
+                return "[-] one or more input databases were not found"
 
             inpath = os.path.normpath(inpath)
             rel = os.path.relpath(os.path.dirname(inpath), rt_path)
@@ -102,7 +111,7 @@ def batch_decrypt(key: str, db_path: Union[str, List[str]], out_path: str):
                 os.makedirs(os.path.dirname(outpath))
             process_list.append([key, inpath, outpath])
     else:
-        return f"[-] db_path:'{db_path}' Error "
+        return "[-] input database path is invalid"
 
     result = []
     for i in process_list:

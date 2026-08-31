@@ -12,7 +12,8 @@ import psutil
 import pymem
 from win32com.client import Dispatch
 
-from app.log import log
+from app.log import log, logger
+from app.log.logger import safe_log_value
 
 ReadProcessMemory = ctypes.windll.kernel32.ReadProcessMemory
 void_p = ctypes.c_void_p
@@ -169,15 +170,16 @@ def read_info(version_list, is_logging=False):
         result.append(tmp_rd)
 
     if is_logging:
-        print("=" * 32)
+        logger.info("wechat_info_probe_complete count=%d", len(result))
         if isinstance(result, str):  # 输出报错
-            print(result)
+            logger.info("wechat_info_probe_result=%s", result)
         else:  # 输出结果
             for i, rlt in enumerate(result):
-                for k, v in rlt.items():
-                    print(f"[+] {k:>8}: {v}")
-                print(end="-" * 32 + "\n" if i != len(result) - 1 else "")
-        print("=" * 32)
+                safe_result = {
+                    key: safe_log_value(key, value)
+                    for key, value in rlt.items()
+                }
+                logger.info("wechat_info_probe_item index=%d fields=%s", i, safe_result)
 
     return result
 
